@@ -1,0 +1,2 @@
+# ahocorasick
+Aho-corasick library
