@@ -1,9 +1,14 @@
 # ahocorasick
 Aho-corasick library
 
-New version of the ahocorasick library
+New version of the ahocorasick library (used in nDPI project)
 
-1. The new version is about 25% faster with -O2 and 45% faster with -O3.
+The 'src' directory contains the original implementation of the aho-corasick algorithm (from nDPI project).
+
+The 'new' directory contains the new implementation.
+The API has barely changed. Almost all data structures have been changed.
+
+1. The new version is up to about 25% faster (with optimization levels -O0 and -O2) and up to 45% faster (with optimization levels -O3). 
 1. No recursion is used (smaller stack size required).
 1. Uses less memory (by valgrind info)
    * bigram:
@@ -17,4 +22,3 @@ New version of the ahocorasick library
 1. Optional case-insensitive comparison.
 1. Matching at the beginning and at the end of the string is supported.
 1. One code file and one header file.
-
