@@ -1,0 +1,6 @@
+*.o
+*.a
+aho-compile
+aho-memleak-*
+aho-search-*
+run_tests*.txt
