@@ -72,7 +72,7 @@ static void dump_node_header(AC_NODE_t * n, struct aho_dump_info *);
 /* Private function prototype */
 static int ac_automata_union_matchstrs (AC_NODE_t * node);
 static void ac_automata_set_failure
-        (AC_AUTOMATA_t * thiz, AC_NODE_t * node, AC_NODE_t * next, AC_ALPHABET_t alpha, void *);
+        (AC_AUTOMATA_t * thiz, AC_NODE_t * node, AC_NODE_t * next, int idx, void *);
 static void ac_automata_traverse_setfailure
         (AC_AUTOMATA_t * thiz);
 
@@ -249,9 +249,10 @@ AC_ERROR_t ac_automata_add (AC_AUTOMATA_t * thiz, AC_PATTERN_t * patt)
 AC_ERROR_t ac_automata_walk(AC_AUTOMATA_t * thiz,
         NODE_CALLBACK_f node_cb, ALPHA_CALLBACK_f alpha_cb, void *data)
 {
-  unsigned int i,ip;
+  unsigned int i,ip,last;
   AC_NODE_t *next, *n;
   struct ac_path * path = thiz->ac_path;
+  AC_ERROR_t r;
 
   ip = 1;
   path[1].n = thiz->root;
@@ -260,37 +261,43 @@ AC_ERROR_t ac_automata_walk(AC_AUTOMATA_t * thiz,
   while(ip) {
     n = path[ip].n;
     i = path[ip].idx;
-    if(!i && node_cb) {
-        AC_ERROR_t r = node_cb(thiz, n, data);
-        if(r != ACERR_SUCCESS) return r;
+    last = !n->outgoing || (n->one && i > 0) || (!n->one && i >= n->outgoing->degree);
+    if(node_cb && (!i || last)) {
+            r = node_cb(thiz, n, i, data);
+            if(r != ACERR_SUCCESS) return r;
     }
-    if(!n->use || (n->one && i > 0) || !n->outgoing) {
+    if(last) {
         ip--; continue;
     }
     next = NULL;
     if(n->one) {
-        if(!i) next = (AC_NODE_t *)n->outgoing;
+        next = (AC_NODE_t *)n->outgoing;
     } else {
         while(i < n->outgoing->degree) {
             next = n->outgoing->next[i];
             if(next) break;
             i++;
         }
-        if(!next) {
-            ip--; continue;
+    }
+    if(!next) {
+        if(!n->range || i >= n->outgoing->degree) {
+            r = node_cb ? node_cb(thiz, n, i, data):ACERR_SUCCESS;
+            if(r != ACERR_SUCCESS) return r;
         }
+        ip--; continue;
     }
 
     if(n->depth < AC_PATTRN_MAX_LENGTH) {
             path[n->depth].l = n->one ? n->one_alpha:
                                     edge_get_alpha(n->outgoing)[i];
             if(alpha_cb)
-                alpha_cb(thiz, n, next, path[n->depth].l, data);
+                alpha_cb(thiz, n, next, i, data);
     }
 
     path[ip].idx = i+1;
     if(ip >= AC_PATTRN_MAX_LENGTH)
         continue;
+
     ip++;
 
     path[ip].n = next;
@@ -301,7 +308,7 @@ AC_ERROR_t ac_automata_walk(AC_AUTOMATA_t * thiz,
 }
 
 
-static AC_ERROR_t ac_finalize_node(AC_AUTOMATA_t * thiz,AC_NODE_t * n, void *data) {
+static AC_ERROR_t ac_finalize_node(AC_AUTOMATA_t * thiz,AC_NODE_t * n, int idx, void *data) {
     if(!n->ff) {
         n->id = ++(thiz->id);
         n->ff = 1;
@@ -479,78 +486,51 @@ int ac_automata_search (AC_AUTOMATA_t * thiz,
  *  2 - clean struct w/o free pattern
  ******************************************************************************/
 
-void ac_automata_release (AC_AUTOMATA_t * thiz, uint8_t free_pattern)
-{
-  struct ac_path *path;
-  AC_NODE_t *n,*next;
-  unsigned int i,ip;
+static AC_ERROR_t ac_automata_release_node(AC_AUTOMATA_t * thiz,
+        AC_NODE_t *n, int idx, void *data) {
 
-  path  = thiz->ac_path;
-
-  ip = 1;
-  path[1].n = thiz->root;
-
-  while(ip) {
-    n = path[ip].n;
-
-    if(!n->outgoing) {
-        node_release(n,free_pattern);
-        ip--; continue;
+    if(!n->outgoing || idx) {
+        if(n->outgoing) {
+          if(n->one) thiz->n_oc--;
+            else if(n->range) thiz->n_range--;
+                  else thiz->n_find--;
+        }
+        node_release(n,data != NULL);
     }
-    next = NULL;
-    if(n->one) {
-        next = (AC_NODE_t *)n->outgoing;
-        n->outgoing = NULL;
+
+    return ACERR_SUCCESS;
+}
+void ac_automata_release (AC_AUTOMATA_t * thiz, uint8_t free_pattern) {
+
+    ac_automata_walk(thiz,ac_automata_release_node,NULL,free_pattern ? (void *)1:NULL);
+
+    if(free_pattern <= 1) {
+        node_release(thiz->root,free_pattern | 0x4);
+        thiz->root = NULL;
+        acho_free(thiz);
     } else {
-        while(n->outgoing->degree != 0) {
-            i = --n->outgoing->degree;
-            next = n->outgoing->next[i];
-            n->outgoing->next[i] = NULL;
-            if(next) break;
+        AC_NODE_t *n;
+        thiz->all_nodes_num  = 0;
+        thiz->total_patterns = 0;
+        thiz->max_str_len    = 0;
+        thiz->automata_open  = 1;
+
+        n = thiz->root;
+        n->failure_node = NULL;
+        n->id    = 0;
+        n->final = 0;
+        n->depth = 0;
+        if(n->outgoing) {
+            acho_free(n->outgoing);
+            n->outgoing = NULL;
         }
-        if(!next && !n->outgoing->degree) {
-            node_release(n,free_pattern);
-            ip--; continue;
+        if(n->matched_patterns) {
+            acho_free(n->matched_patterns);
+            n->matched_patterns=NULL;
         }
+        n->use = 0;
+        n->one = 0;
     }
-
-    if(!next) {
-        if(!n->range) ip--;
-        continue;
-    }
-
-    if(ip >= AC_PATTRN_MAX_LENGTH)
-        continue;
-    ip++;
-    path[ip].n = next;
-  }
-
-  if(free_pattern <= 1) {
-    node_release(thiz->root,free_pattern | 0x4);
-    thiz->root = NULL;
-    acho_free(thiz);
-  } else {
-    thiz->all_nodes_num  = 0;
-    thiz->total_patterns = 0;
-    thiz->max_str_len    = 0;
-    thiz->automata_open  = 1;
-
-    n = thiz->root;
-    n->failure_node = NULL;
-    n->id    = 0;
-    n->final = 0;
-    n->depth = 0;
-    if(n->outgoing) {
-        acho_free(n->outgoing);
-        n->outgoing = NULL;
-    }
-    if(n->matched_patterns) {
-        acho_free(n->matched_patterns);
-        n->matched_patterns=NULL;
-    }
-    n->use = 0;
-    n->one = 0;
-  }
 }
 
 #ifndef __KERNEL__
@@ -592,10 +572,12 @@ static void dump_node_header(AC_NODE_t * n, struct aho_dump_info *ai) {
     ai->memcnt += sizeof(n->outgoing) + edge_data_size(n->outgoing->max);
 }
 
-static AC_ERROR_t dump_node_common(AC_AUTOMATA_t * thiz, AC_NODE_t * n, void *data) {
+static AC_ERROR_t dump_node_common(AC_AUTOMATA_t * thiz,
+        AC_NODE_t * n, int idx, void *data) {
     struct aho_dump_info *ai = (struct aho_dump_info *)data;
     char *rstr = ai->bufstr;
     AC_PATTERN_t *sid;
+    if(idx) return ACERR_SUCCESS;
     dump_node_header(n,ai);
     if (n->matched_patterns && n->matched_patterns->num && n->final) {
         char lbuf[300];
@@ -616,9 +598,9 @@ static AC_ERROR_t dump_node_common(AC_AUTOMATA_t * thiz, AC_NODE_t * n, void *da
     return ACERR_SUCCESS;
 }
 static void dump_node_str(AC_AUTOMATA_t * thiz, AC_NODE_t * node,
-        AC_NODE_t * next, AC_ALPHABET_t alpha, void *data) {
+        AC_NODE_t * next, int idx, void *data) {
     struct aho_dump_info *ai = (struct aho_dump_info *)data;
-    ai->bufstr[node->depth] = alpha;
+    ai->bufstr[node->depth] = thiz->ac_path[node->depth].l;
     ai->bufstr[node->depth+1] = 0;
 }
 
@@ -681,7 +663,7 @@ static int ac_automata_union_matchstrs (AC_NODE_t * node)
  * find failure node for the given node.
  ******************************************************************************/
 static void ac_automata_set_failure
-(AC_AUTOMATA_t * thiz, AC_NODE_t * node, AC_NODE_t * next, AC_ALPHABET_t alpha, void *data)
+(AC_AUTOMATA_t * thiz, AC_NODE_t * node, AC_NODE_t * next, int idx, void *data)
 {
   unsigned int i, j;
   AC_NODE_t * m;

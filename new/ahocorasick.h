@@ -163,7 +163,7 @@ struct edge;
 
 /*
  * automata node
- * 3 pointers + 8 bytes : 32/20 bytes for 64/32 bit
+ * 4 pointers + 8 bytes : 40/24 bytes for 64/32 bit
  */
 typedef struct ac_node
 {
@@ -177,11 +177,11 @@ typedef struct ac_node
 		 ff:1;		       /* finalized node */
   unsigned short depth;                /* depth: distance between this node and the root */
 
-  AC_PATTERNS_t  * matched_patterns;   /* Array of matched patterns */
-  struct edge   * outgoing;           /* Array of outgoing edges */
+  AC_PATTERNS_t  *matched_patterns;   /* Array of matched patterns */
+  struct edge    *outgoing;           /* Array of outgoing edges */
 
-  struct ac_node * failure_node;       /* The failure node of this node */
-  AC_ALPHABET_t *a_ptr;
+  struct ac_node *failure_node;       /* The failure node of this node */
+  AC_ALPHABET_t  *a_ptr;
 } AC_NODE_t;
 
 #ifndef __SIZEOF_POINTER__
@@ -235,9 +235,9 @@ typedef struct
   int n_oc,n_range,n_find; /* statistics */
 } AC_AUTOMATA_t;
 
-typedef AC_ERROR_t (*NODE_CALLBACK_f)(AC_AUTOMATA_t *, AC_NODE_t *,void *);
+typedef AC_ERROR_t (*NODE_CALLBACK_f)(AC_AUTOMATA_t *, AC_NODE_t *,int idx, void *);
 
-typedef void (*ALPHA_CALLBACK_f)(AC_AUTOMATA_t *, AC_NODE_t *,AC_NODE_t *,AC_ALPHABET_t ,void *);
+typedef void (*ALPHA_CALLBACK_f)(AC_AUTOMATA_t *, AC_NODE_t *,AC_NODE_t *,int ,void *);
 
 #define AC_FEATURE_LC 1
 #define AC_FEATURE_NO_ROOT_RANGE 2

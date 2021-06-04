@@ -296,7 +296,7 @@ static void xdump_node_header(AC_NODE_t * n) {
 #endif
 // }}}}
 
-static AC_ERROR_t ac_automata_count_cb(AC_AUTOMATA_t * thiz, AC_NODE_t * n, void *data ) {
+static AC_ERROR_t ac_automata_count_cb(AC_AUTOMATA_t * thiz, AC_NODE_t * n, int idx, void *data ) {
     struct aho_compile *ac = (struct aho_compile *)data;
     if(n->use) {
         if(!n->one && n->outgoing->degree > 1) {
@@ -342,7 +342,6 @@ void x_automata_compile(AC_AUTOMATA_t * thiz, char *rstr, size_t rstr_size,const
 
   bzero((char *)&ac,sizeof(ac));
   ac_automata_walk(thiz,ac_automata_count_cb,NULL,&ac);
-//  x_automata_count(thiz,rstr,rstr_size,&ac);
   ac.a_node    = calloc(thiz->all_nodes_num+2,sizeof(struct aho_node));
   ac.outgoings = calloc(1,ac.outgoing_count+2);
   ac.next      = calloc(ac.outgoing_count+1,sizeof(int));

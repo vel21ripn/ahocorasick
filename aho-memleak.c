@@ -38,7 +38,7 @@ struct host_info {
 #define BT_BUF_SIZE 128
 
 int debug_alloc_flag=0;
-
+int n_call_alloc = 0, n_size_alloc = 0;
 char *pr_call(char *rbuf,size_t rb_size) {
    int nptrs;
    void *buffer[BT_BUF_SIZE];
@@ -65,21 +65,24 @@ char *pr_call(char *rbuf,size_t rb_size) {
 void *ndpi_malloc(size_t size) {
   void *r = malloc(size);
   char buf[256];
-  if(debug_alloc_flag) printf("malloc(%d)=%lx %s\n",(int)size,(unsigned long)r,
+  n_call_alloc++;
+  if(debug_alloc_flag) printf("malloc(%4d)=%lx %s\n",(int)size,(unsigned long)r,
 	 pr_call(buf,sizeof(buf)-1));
   return r;
 }
 
 void *ndpi_calloc(size_t n, size_t size) {
   void *r = calloc(n,size);
+  n_call_alloc++;
   char buf[256];
-  if(debug_alloc_flag) printf("calloc(%d,%d)=%lx %s\n",(int)n,(int)size,(unsigned long)r,
+  if(debug_alloc_flag) printf("calloc(%d,%4d)=%lx %s\n",(int)n,(int)size,(unsigned long)r,
 	 pr_call(buf,sizeof(buf)-1));
   return r;
 }
 
 void ndpi_free(void *ptr) {
   char buf[256];
+  n_call_alloc--;
   if(debug_alloc_flag) printf("free(%lx) %s\n",(unsigned long)ptr,
 	 pr_call(buf,sizeof(buf)-1));
   free(ptr);
@@ -87,6 +90,7 @@ void ndpi_free(void *ptr) {
 void *ndpi_realloc(void *ptr, size_t osize, size_t nsize) {
   void *r = realloc(ptr,nsize);
   char buf[256];
+  if(!ptr) n_call_alloc++;
   if(debug_alloc_flag) printf("realloc(%lx,%d,%d)=%lx %s\n",
 	(unsigned long)ptr,(int)osize,(int)nsize,(unsigned long)r,
 	 pr_call(buf,sizeof(buf)-1));
@@ -131,7 +135,7 @@ AC_REP_t id;
 int main(int argc,char **argv) {
 
 AC_AUTOMATA_t *ac;
-int i,j,max_j,c256;
+int i,j,max_j;
 struct timeval tv1,tv2;
 #ifdef BIGRAM
 int max_i = sizeof(ndpi_en_bigrams)/sizeof(ndpi_en_bigrams[0]);
@@ -148,34 +152,49 @@ int max_i = sizeof(ndpi_en_bigrams)/sizeof(ndpi_en_bigrams[0]);
   max_j = L0;
   if(argv[1] && atoi(argv[1]) > 0 && atoi(argv[1]) < max_i) max_i = atoi(argv[1]);
   if(argc > 2 && argv[2] && atoi(argv[2]) > 0) max_j = atoi(argv[2]);
-  c256 = getenv("C256") ? 1:0;
   gettimeofday(&tv1,NULL);
 i=0;
 for(j=0; j < max_j; j++) {
   ac = ac_automata_init(ac_automata_cb);
-//  if(c256 && ac_automata_feature(ac,AC_FEATURE_8BIT) != ACERR_SUCCESS) abort();
+//  if(ac_automata_feature(ac,AC_FEATURE_LC) != ACERR_SUCCESS) abort();
   if(!ac) abort();
   for(i=0; i < max_i && HOSTINFO(i); i++) {
 	if(!add_str(ac,HOSTINFO(i),HOSTLOC(i)))
 		abort();
   }
+#ifdef NEW_AHO
+  if(0){
+    char buf[256];
+    if(j == 0 && getenv("DUMP")) ac_automata_dump(ac,buf,sizeof(buf)-1,1);
+  }
+#endif
   ac_automata_finalize(ac);
 #ifdef NEW_AHO
   if(j == 0) {
 	  printf("all:%d one:%d range:%d find:%d\t",
 		ac->all_nodes_num,ac->n_oc,ac->n_range,ac->n_find);
+//	  printf("\n");
   }
   {
     char buf[256];
-    if(max_j == 1 && getenv("DUMP")) ac_automata_dump(ac,buf,sizeof(buf)-1,1);
+    if(j == 0 && getenv("DUMP")) ac_automata_dump(ac,buf,sizeof(buf)-1,1);
   }
 #endif
   ac_automata_release(ac,0);
+  if(n_call_alloc) {
+	  printf("n_call_alloc %d\n",n_call_alloc);
+
+#ifdef NEW_AHO
+	  printf("all:%d one:%d range:%d find:%d\t",
+		ac->all_nodes_num,ac->n_oc,ac->n_range,ac->n_find);
+#endif
+	  exit(1);
+  }
 }
   gettimeofday(&tv2,NULL);
   printf("time %lld usec ",(tv2.tv_sec*1000000ll + tv2.tv_usec) -
                 (tv1.tv_sec*1000000ll + tv1.tv_usec));
-  printf("i=%d %s max_j %d max_i %d\n",i,c256 ? "256":"128",max_j,max_i);
+  printf("i=%d max_j %d max_i %d\n",i,max_j,max_i);
 
 return 0;
 }

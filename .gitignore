@@ -4,3 +4,4 @@ aho-compile
 aho-memleak-*
 aho-search-*
 run_tests*.txt
+aho-c[1-4].h
