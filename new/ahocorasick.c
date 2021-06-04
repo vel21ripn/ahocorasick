@@ -52,7 +52,8 @@ static AC_NODE_t * node_create_next       (AC_NODE_t * thiz, AC_ALPHABET_t alpha
 static int         node_register_matchstr (AC_NODE_t * thiz, AC_PATTERN_t * str, int is_existing);
 static int         node_register_outgoing (AC_NODE_t * thiz, AC_NODE_t * next, AC_ALPHABET_t alpha);
 static AC_NODE_t * node_find_next         (AC_NODE_t * thiz, AC_ALPHABET_t alpha);
-static AC_NODE_t * node_findbs_next       (AC_NODE_t * thiz, AC_ALPHABET_t alpha);
+static AC_NODE_t * node_findbs_next       (AC_NODE_t * thiz, uint8_t alpha);
+static AC_NODE_t * node_findbs_next_ac    (AC_NODE_t * thiz, uint8_t alpha,int icase);
 static void        node_release           (AC_NODE_t * thiz, int free_pattern);
 static void        node_release_pattern   (AC_NODE_t * thiz);
 static int         node_range_edges       (AC_AUTOMATA_t *thiz, AC_NODE_t * node);
@@ -185,8 +186,8 @@ AC_ERROR_t ac_automata_feature (AC_AUTOMATA_t * thiz, unsigned int feature)
 {
   if(!thiz) return ACERR_ERROR;
   if(thiz->all_nodes_num || thiz->total_patterns) return ACERR_ERROR;
-  thiz->to_lc = feature & AC_FEATURE_LC ? 1:0;
-  thiz->no_root_range = feature & AC_FEATURE_NO_ROOT_RANGE ? 1:0;
+  thiz->to_lc = (feature & AC_FEATURE_LC) != 0;
+  thiz->no_root_range = (feature & AC_FEATURE_NO_ROOT_RANGE) != 0;
   return ACERR_SUCCESS;
 }
 
@@ -249,7 +250,7 @@ AC_ERROR_t ac_automata_add (AC_AUTOMATA_t * thiz, AC_PATTERN_t * patt)
 AC_ERROR_t ac_automata_walk(AC_AUTOMATA_t * thiz,
         NODE_CALLBACK_f node_cb, ALPHA_CALLBACK_f alpha_cb, void *data)
 {
-  unsigned int i,ip,last;
+  unsigned int ip;
   AC_NODE_t *next, *n;
   struct ac_path * path = thiz->ac_path;
   AC_ERROR_t r;
@@ -259,6 +260,7 @@ AC_ERROR_t ac_automata_walk(AC_AUTOMATA_t * thiz,
   path[1].idx = 0;
 
   while(ip) {
+    unsigned int i,last;
     n = path[ip].n;
     i = path[ip].idx;
     last = !n->outgoing || (n->one && i > 0) || (!n->one && i >= n->outgoing->degree);
@@ -407,7 +409,7 @@ int ac_automata_exact_match(AC_PATTERNS_t *mp,int pos, AC_TEXT_t *txt) {
 int ac_automata_search (AC_AUTOMATA_t * thiz,
         AC_TEXT_t * txt, AC_REP_t * param)
 {
-  AC_ALPHABET_t alpha;
+  uint8_t alpha;
   unsigned long position;
   int icase = 0,i;
   AC_MATCH_t *match;
@@ -420,25 +422,21 @@ int ac_automata_search (AC_AUTOMATA_t * thiz,
     return -1;
   position = 0;
   curr = thiz->root;
-  match = &txt->match;
   apos = txt->astring;
-  match->match_counter=0;
-  match->matched[0] = NULL;
-  match->matched[1] = NULL;
-  match->matched[2] = NULL;
-  match->matched[3] = NULL;
-  icase = !thiz->to_lc && txt->ignore_case; 
+  match = &txt->match;
+  memset((char*)match,0,sizeof(*match));
+
+  icase = !thiz->to_lc;
+  /* The 'txt->ignore_case' option is checked
+   * separately otherwise clang will detect
+   * uninitialized memory usage much later. */
+  if(txt->ignore_case == 1) icase = 1;
   /* This is the main search loop.
    * it must be keep as lightweight as possible. */
   while (position < txt->length) {
-      alpha = apos[position];
-      if(thiz->to_lc) alpha = (AC_ALPHABET_t)aho_lc[(uint8_t)alpha];
-      next = node_findbs_next(curr, alpha);
-      if(!next && icase) {
-        uint8_t alpha_c = aho_xc[(uint8_t)alpha];
-        if(alpha_c) next = node_findbs_next(curr, alpha ^ alpha_c);
-      }
-      if(!next) {
+      alpha = (uint8_t)apos[position];
+      if(thiz->to_lc) alpha = aho_lc[alpha];
+      if(!(next = node_findbs_next_ac(curr, (uint8_t)alpha, icase))) {
           if(curr->failure_node) /* we are not in the root node */
             curr = curr->failure_node;
           else
@@ -446,21 +444,20 @@ int ac_automata_search (AC_AUTOMATA_t * thiz,
       } else {
           curr = next;
           position++;
-      }
-
-      if(curr->final && next) {
-          /* we found a match! do call-back */
-          ac_automata_exact_match(curr->matched_patterns,position,txt);
-          match->match_counter++; /* we have a matching */
-          if(thiz->match_handler) {
-              /* We check 'next' to find out if we came here after a alphabet
-               * transition or due to a fail. in second case we should not report
-               * matching because it was reported in previous node */
-              match->position = position;
-              match->match_num = curr->matched_patterns->num;
-              match->patterns = curr->matched_patterns->patterns;
-              if (thiz->match_handler(match, txt, param))
-                  return 1;
+          if(curr->final) {
+              match->match_counter++; /* we have a matching */
+              /* select best match */
+              ac_automata_exact_match(curr->matched_patterns,position,txt);
+              if(thiz->match_handler) {
+                  /* We check 'next' to find out if we came here after a alphabet
+                   * transition or due to a fail. in second case we should not report
+                   * matching because it was reported in previous node */
+                  match->position = position;
+                  match->match_num = curr->matched_patterns->num;
+                  match->patterns = curr->matched_patterns->patterns;
+                  if (thiz->match_handler(match, txt, param))
+                      return 1;
+              }
           }
       }
   }
@@ -576,7 +573,7 @@ static AC_ERROR_t dump_node_common(AC_AUTOMATA_t * thiz,
         AC_NODE_t * n, int idx, void *data) {
     struct aho_dump_info *ai = (struct aho_dump_info *)data;
     char *rstr = ai->bufstr;
-    AC_PATTERN_t *sid;
+
     if(idx) return ACERR_SUCCESS;
     dump_node_header(n,ai);
     if (n->matched_patterns && n->matched_patterns->num && n->final) {
@@ -585,7 +582,7 @@ static AC_ERROR_t dump_node_common(AC_AUTOMATA_t * thiz,
 
         nl = snprintf(lbuf,sizeof(lbuf),"'%.100s' N:%d{",rstr,n->matched_patterns->num);
         for (j=0; j<n->matched_patterns->num; j++) {
-            sid = &n->matched_patterns->patterns[j];
+            AC_PATTERN_t *sid = &n->matched_patterns->patterns[j];
             if(j) nl += snprintf(&lbuf[nl],sizeof(lbuf)-nl-1,", ");
             nl += snprintf(&lbuf[nl],sizeof(lbuf)-nl-1,"%d %c%.100s%c",
                             sid->rep.number & 0x3fff,
@@ -759,8 +756,8 @@ static inline size_t bsf(uint32_t bits)
 #else
     size_t i=0;
     if(!bits) return i;
-    if((int16_t)bits == 0) { i+=16; bits >>=16; }
-    if((int8_t)bits == 0) i+=8;
+    if((bits & 0xffff)bits == 0) { i+=16; bits >>=16; }
+    if((bits & 0xff) == 0) i+=8;
     return i;
 #endif
 }
@@ -776,9 +773,9 @@ static inline size_t bsf(uint64_t bits)
 #else
     size_t i=0;
     if(!bits) return i;
-    if((int32_t)bits == 0) { i+=32; bits >>=32; }
-    if((int16_t)bits == 0) { i+=16; bits >>=16; }
-    if((int8_t)bits == 0) i+=8;
+    if((bits & 0xffffffff) == 0) { i+=32; bits >>=32; }
+    if((bits & 0xffff) == 0) { i+=16; bits >>=16; }
+    if((bits & 0xff) == 0) i+=8;
     return i;
 #endif
 }
@@ -791,11 +788,11 @@ xmemchr(char *s, char i,int n)
 
   while(n > 0) {
     if (n >= LBLOCKSIZE && !UNALIGNED (s)) {
-      unsigned long int mask,nc;
+      unsigned long int mask;
       mask = c * DUPC;
 
       while (n >= LBLOCKSIZE) {
-        nc = DETECTNULL((*(unsigned long int *)s) ^ mask);
+        unsigned long int nc = DETECTNULL((*(unsigned long int *)s) ^ mask);
         if(nc)
             return s + (bsf(nc) >> 3);
         s += LBLOCKSIZE;
@@ -836,24 +833,34 @@ static AC_NODE_t * node_find_next(AC_NODE_t * thiz, AC_ALPHABET_t alpha)
  * pre-processing stage in which we sort edges. so it uses Binary Search.
  ******************************************************************************/
 
-// static AC_NODE_t * __attribute__ ((noinline)) node_findbs_next (AC_NODE_t * thiz, AC_ALPHABET_t alpha)
-static AC_NODE_t *node_findbs_next (AC_NODE_t * thiz, AC_ALPHABET_t alpha)
+static inline AC_NODE_t *node_findbs_next (AC_NODE_t * thiz, uint8_t alpha)
 {
-  AC_ALPHABET_t *alphas;
-
-  if(!thiz->outgoing) return NULL;
 
   if(thiz->one)
         return alpha == thiz->one_alpha ? (AC_NODE_t *)thiz->outgoing:NULL;
 
-  if(!(thiz->outgoing->cmap[(uint8_t)alpha >> 5] & (1 << (alpha & 0x1f))))
+  if(!(thiz->outgoing->cmap[(uint8_t)alpha >> 5] & (1u << (alpha & 0x1f))))
         return NULL;
 
   if(thiz->range)
         return thiz->outgoing->next[(uint8_t)alpha - (uint8_t)thiz->one_alpha];
 
-  alphas = xmemchr((char *)thiz->a_ptr,(char)alpha,thiz->outgoing->degree);
-  return thiz->outgoing->next[alphas-thiz->a_ptr];
+  return thiz->outgoing->next[
+      xmemchr((char *)thiz->a_ptr,(char)alpha,thiz->outgoing->degree) - thiz->a_ptr];
+}
+
+static AC_NODE_t *node_findbs_next_ac (AC_NODE_t * thiz, uint8_t alpha,int icase) {
+  AC_NODE_t *next;
+  uint8_t alpha_c;
+
+  if(!thiz->outgoing) return NULL;
+
+  next = node_findbs_next(thiz,alpha);
+  if(next || !icase) return next;
+
+  alpha_c = aho_xc[alpha];
+  if(!alpha_c) return NULL;
+  return  node_findbs_next(thiz, alpha ^ alpha_c);
 }
 
 /******************************************************************************
@@ -1055,7 +1062,7 @@ static void acho_2range(AC_NODE_t * thiz,uint8_t low, uint8_t high) {
     thiz->one_alpha = (AC_ALPHABET_t)low;
     e = thiz->outgoing;
     for (i=0; low <= high && i < e->max; i++,low++) {
-      if(e->cmap[low >> 5] & (1 << (low & 0x1f))) continue;
+      if(e->cmap[(low >> 5) & 0x7] & (1u << (low & 0x1f))) continue;
       c[e->degree] = low;
       e->next[e->degree] = NULL;
       e->degree++;
@@ -1070,15 +1077,15 @@ static int node_range_edges (AC_AUTOMATA_t *thiz, AC_NODE_t * node)
 {
     struct edge *e = node->outgoing;
     uint8_t *c = (uint8_t *)edge_get_alpha(node->outgoing);
-    uint8_t low = 0xff,high = 0, cc;
+    uint8_t low = 0xff,high = 0;
     int i;
 
     memset((char *)&e->cmap,0,sizeof(e->cmap));
     for(i = 0; i < e->degree; i++) {
-      cc = c[i];
+      uint8_t cc = c[i];
       if(cc < low) low = cc;
       if(cc > high) high = cc;
-      e->cmap[cc >> 5] |= 1 << (cc & 0x1f);
+      e->cmap[(cc >> 5) & 0x7] |= 1u << (cc & 0x1f);
     }
     if(high - low + 1 == e->degree) {
         node->range = 1;

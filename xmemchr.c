@@ -39,9 +39,9 @@ size_t __attribute__ ((noinline)) bsf(uint64_t bits)
 //#else
     size_t i=0;
     if(!bits) return i;
-    if((int32_t)bits == 0) { i+=32; bits >>=32; }
-    if((int16_t)bits == 0) { i+=16; bits >>=16; }
-    if((int8_t)bits == 0) i+=8;
+    if((bits & 0xffffffff) == 0) { i+=32; bits >>=32; }
+    if((bits & 0xffff) == 0) { i+=16; bits >>=16; }
+    if((bits & 0xff) == 0) i+=8;
     return i;
 #endif
 }
