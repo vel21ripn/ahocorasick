@@ -143,10 +143,11 @@ void chomp(char *buf) {
 void usage(char *s) {
     if(s) printf("%s\n",s);
      else {
-         printf("aho-compile -N name [-D] [-A] [-I] [-d] [-p] [-h] file\n\
+         printf("aho-compile -N name [-D] [-A] [-I] [-d] [-p] [-h] [-H str] file\n\
    -A           - no auto numbering\n\
    -d           - dump tree (for debug)\n\
    -D           - with define\n\
+   -H str       - define starting from str ('H_' by default)\n\
    -I           - ignore case by default\n\
    -p           - patterns output\n\
    -h           - help\n");
@@ -166,16 +167,21 @@ int no_inc = 0;
 int to_lc = 0;
 int do_dump = 0;
 int do_patt = 0;
+int def_str_len;
+char *def_str = NULL;
 FILE *ifd;
 
   ac_name[0] = 0;
 
-  while ((c = getopt(argc, argv, "hN:DAIdp")) != -1) {
+  while ((c = getopt(argc, argv, "hN:H:DAIdp")) != -1) {
     switch(c) {
       case 'h':
           usage(NULL);
       case 'N':
           strncpy(ac_name,optarg,sizeof(ac_name));
+          break;
+      case 'H':
+          def_str = strdup(optarg);
           break;
       case 'D':
           with_def = 1;
@@ -194,6 +200,8 @@ FILE *ifd;
           break;
     }
   }
+  if(!def_str) def_str = strdup("H_");
+  def_str_len = strlen(def_str);
   if(!ac_name[0]) usage(NULL);
   if (optind < argc) {
       ifd = fopen(argv[optind],"r");
@@ -210,6 +218,11 @@ FILE *ifd;
     chomp(buf);
     if(!buf[0]) continue;
       if(with_def) {
+        if(strncmp(buf,def_str,def_str_len)) {
+            fprintf(stderr,"Bad define '%s' not start from '%s'\n",
+                    buf,def_str);
+            exit(1);
+        }
         if(!fgets(buf2,sizeof(buf2)-1,ifd)) break;
         chomp(buf2);
         if(!buf2[0]) break;
@@ -433,20 +446,31 @@ void ac_automata_compile(AC_AUTOMATA_t * thiz, const char *name,int do_patt) {
   bzero((char *)&ac,sizeof(ac));
   ac_automata_walk(thiz,ac_automata_count_cb,NULL,&ac);
   ac.a_node    = calloc(thiz->all_nodes_num+2,sizeof(struct aho_node));
+  if(!ac.a_node) { perror("malloc"); exit(1); }
   ac.outgoings = calloc(1,ac.outgoing_count+2);
+  if(!ac.outgoings) { perror("malloc"); exit(1); }
   ac.next      = calloc(ac.outgoing_count+1,sizeof(int));
+  if(!ac.next) { perror("malloc"); exit(1); }
   ac.patterns  = calloc(ac.pattern_count+1,sizeof(char *));
+  if(!ac.patterns) { perror("malloc"); exit(1); }
   ac.pattern_list = calloc(ac.pattern_list_count+1,sizeof(struct aho_patterns));
+  if(!ac.pattern_list) { perror("malloc"); exit(1); }
+
   ac.last_pattern=1;
   ac.last_pattern_list=1;
   ac.last_outgoing=1;
   *ac.outgoings = '#';
 
-  if(!ac.a_node) abort();
   ac.rstr[0] = '\0';
 
-  if(ac_automata_walk(thiz,ac_automata_compile_node,ac_automata_compile_nextchar,&ac) != ACERR_SUCCESS) abort();
-
+  if(ac_automata_walk(thiz,ac_automata_compile_node,ac_automata_compile_nextchar,&ac) != ACERR_SUCCESS) {
+      fprintf(stderr,"Can't compile ahocorasick structs\n");
+      exit(1);
+  }
+  if(thiz->all_nodes_num >= 65535) {
+      fprintf(stderr,"Too many nodes (%d)\n",thiz->all_nodes_num+1);
+      exit(1);
+  }
   printf("#include \"libahocorasick-c.h\"\n");
   printf("struct aho_node a_node_%s[]= {\n",name);
   for(i=0,an = ac.a_node; i <= thiz->all_nodes_num+1; i++,an++) {
@@ -470,16 +494,18 @@ void ac_automata_compile(AC_AUTOMATA_t * thiz, const char *name,int do_patt) {
       }
 // }}}}
   }
-  printf("      {} };\n    struct aho_patterns pattern_list_%s[]= {\n",name);
-  apl = &ac.pattern_list[0];
-  for(i=0; i < ac.last_pattern_list; i++,apl++) {
-      printf("      { .len=%d, .from_start=%d, .at_end=%d, .last=%d, .code=%d, .pattern=%d }, /* %d */\n",
+  printf("      {} };\n");
+  {
+    printf("    struct aho_patterns pattern_list_%s[]= {\n",name);
+    apl = &ac.pattern_list[0];
+    for(i=0; i < ac.last_pattern_list; i++,apl++) {
+        printf("      { .len=%d, .from_start=%d, .at_end=%d, .last=%d, .code=%d, .pattern=%d }, /* %d */\n",
               apl->len,apl->from_start,apl->at_end,apl->last,apl->code,apl->pattern,i);
   }
   {
-  char buf[128],*eb,*o;
-  printf("      {}};\n    char outgoings_%s[] =\n",name);
-  for(i=0,eb = &buf[sizeof(buf)-1],o = buf; i < ac.last_outgoing; i++) {
+    char buf[128],*eb,*o;
+    printf("      {}};\n    char outgoings_%s[] =\n",name);
+    for(i=0,eb = &buf[sizeof(buf)-1],o = buf; i < ac.last_outgoing; i++) {
       switch(ac.outgoings[i]) {
         case  '\0' : *o++ = '\\'; *o++ = '0'; break;
         case  '\t' : *o++ = '\\'; *o++ = 't'; break;
@@ -496,7 +522,7 @@ void ac_automata_compile(AC_AUTOMATA_t * thiz, const char *name,int do_patt) {
           printf("\t\t\"%s\"%s\n",buf,i == ac.last_outgoing-1 ? ";":" \\");
           o = buf;
       }
-  }
+    }
   }
   printf("    unsigned short next_%s[]= {\n",name);
   for(i=0,j=0; i < ac.last_outgoing; i++) {
@@ -505,8 +531,8 @@ void ac_automata_compile(AC_AUTOMATA_t * thiz, const char *name,int do_patt) {
       j += xlen(ac.next[i])+1;
       if(j > 80) j = 0;
   }
-
   printf("};\n");
+
   if(do_patt) {
     printf("    char *patterns_%s[]= { NULL,\n",name);
     for(i=1; i < ac.last_pattern; i++) {

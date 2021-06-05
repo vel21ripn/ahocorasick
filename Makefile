@@ -8,6 +8,7 @@ INC2=-I. -Inew
 CFLAGS=-ggdb3 -O3 -Wall -Wno-stringop-truncation -std=c99 #-rdynamic
 CFLAGS=-ggdb3 -O2 -Wall -Wno-stringop-truncation -std=c99 #-rdynamic
 #CFLAGS=-ggdb3 -O0 -Wall -Wno-stringop-truncation -std=c99 -rdynamic
+#for clang
 #CFLAGS=-ggdb3 -O3 -Wall -std=c99 #-rdynamic
 #-Wextra
 # for pahole
