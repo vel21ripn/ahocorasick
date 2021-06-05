@@ -4,8 +4,11 @@ Content-Encoding:
 H_Transfer_Encoding
 Transfer-Encoding:
 
+H_Cod
+CoD:|
+
 H_Coding
-coding:|
+Coding:|
 
 H_Encoding
 Encoding:|

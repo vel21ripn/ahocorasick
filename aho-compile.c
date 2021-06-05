@@ -22,6 +22,8 @@ struct aho_compile {
     int             last_outgoing;
     int             last_pattern;
     int             last_pattern_list;
+    int             rstr_size;
+    char            rstr[AC_PATTRN_MAX_LENGTH+4];
     struct aho_node *a_node;
     struct aho_patterns *pattern_list;
     int             *next;
@@ -40,7 +42,7 @@ static inline AC_ALPHABET_t *edge_get_alpha(struct edge *e) {
         return (AC_ALPHABET_t *)(&e->next[e->max]);
 }
 
-void x_automata_compile(AC_AUTOMATA_t * thiz, char *rstr, size_t rstr_size,const char *name,int do_patt);
+void ac_automata_compile(AC_AUTOMATA_t * thiz, const char *name,int do_patt);
 
 // {{{{
 void *ndpi_malloc(size_t size) {
@@ -146,7 +148,7 @@ void usage(char *s) {
    -d           - dump tree (for debug)\n\
    -D           - with define\n\
    -I           - ignore case by default\n\
-   -p           - no patterns output\n\
+   -p           - patterns output\n\
    -h           - help\n");
      }
      exit(0);
@@ -163,7 +165,7 @@ int is_hex = 0;
 int no_inc = 0;
 int to_lc = 0;
 int do_dump = 0;
-int do_patt = 1;
+int do_patt = 0;
 FILE *ifd;
 
   ac_name[0] = 0;
@@ -188,7 +190,7 @@ FILE *ifd;
           do_dump = 1;
           break;
       case 'p':
-          do_patt = 0;
+          do_patt = 1;
           break;
     }
   }
@@ -249,7 +251,7 @@ FILE *ifd;
       if(num != ll->code)
           fprintf(stderr,"%.*s %d != %d\n",ll->len,ll->str,num,ll->code);
   }
-  x_automata_compile(ac,buf,sizeof(buf)-1,ac_name,do_patt);
+  ac_automata_compile(ac,ac_name,do_patt);
 
   ac_automata_release(ac,0);
   return 0;
@@ -298,6 +300,10 @@ static void xdump_node_header(AC_NODE_t * n) {
 
 static AC_ERROR_t ac_automata_count_cb(AC_AUTOMATA_t * thiz, AC_NODE_t * n, int idx, void *data ) {
     struct aho_compile *ac = (struct aho_compile *)data;
+    int last = !n->one && n->outgoing &&  idx > 0;
+
+    if(last) return ACERR_SUCCESS;
+
     if(n->use) {
         if(!n->one && n->outgoing->degree > 1) {
             ac->outgoing_count += n->outgoing->degree;
@@ -311,14 +317,14 @@ static AC_ERROR_t ac_automata_count_cb(AC_AUTOMATA_t * thiz, AC_NODE_t * n, int 
             AC_PATTERN_t *sid = &n->matched_patterns->patterns[j];
             if(!sid->is_existing) {
 				ac->pattern_count++;
-				ac->pattern_length += sid->length;
+				ac->pattern_length += sid->length+1;
 			}
         }
     }
     return ACERR_SUCCESS;
 }
 
-int aho_find_pattern(struct aho_compile *ac, char *str,size_t strlen) {
+static int aho_find_pattern(struct aho_compile *ac, char *str,size_t strlen) {
 int i,j;
 for(i = 1; i < ac->last_pattern_list; i++) {
     j = ac->pattern_list[i].pattern;
@@ -330,14 +336,98 @@ for(i = 1; i < ac->last_pattern_list; i++) {
 return 0;
 }
 
-void x_automata_compile(AC_AUTOMATA_t * thiz, char *rstr, size_t rstr_size,const char *name,int do_patt) {
-  unsigned int i, j, ip, l;
+static AC_ERROR_t ac_automata_compile_node(AC_AUTOMATA_t * thiz, AC_NODE_t *n, int idx, void *data ) {
+  struct aho_compile *ac = (struct aho_compile *)data;
+  struct aho_node *an;
+  struct aho_patterns *apl;
+  int last = !n->one && n->outgoing &&  idx > 0;
+
+  if(last) return ACERR_SUCCESS;
+
+    //xdump_node_header(n)
+    an = &ac->a_node[n->id];
+    an->f_node = n->failure_node ? n->failure_node->id : 0;
+    if(n->use) {
+        an->range = n->range;
+        if(n->one) {
+            an->degree = 0;
+            an->alpha = n->one_alpha;
+            an->outgoing = ((AC_NODE_t *)n->outgoing)->id;
+        } else {
+            int nn;
+            char *c_d;
+            char *c = (char *)edge_get_alpha(n->outgoing);
+            uint8_t c_x;
+            /* Is it possible to search for a characters case-insensitive? */
+            an->degree = n->outgoing->degree - 1;
+            an->alpha = n->range ? n->one_alpha:0;
+            an->outgoing = ac->last_outgoing;
+            for(nn = 0; nn < n->outgoing->degree; nn++,ac->last_outgoing++) {
+                ac->outgoings[ac->last_outgoing] = c[nn];
+                ac->next[ac->last_outgoing] = n->outgoing->next[nn] ? n->outgoing->next[nn]->id : 0;
+                if(thiz->to_lc) continue;
+                c_x = toupper(c[nn]) ^ tolower(c[nn]);
+                if(!c_x) continue;
+                c_d = memchr(c,c[nn]^c_x,n->outgoing->degree);
+                if(!c_d) continue;
+                if(n->outgoing->next[nn] != n->outgoing->next[c_d-c] &&
+                   n->outgoing->next[nn] && n->outgoing->next[c_d-c] && c_d-c > nn) {
+                    fprintf(stderr,"Warning! String '%s%c' and '%s%c' is different by case (pos %d, node_id %d)\n",
+                            ac->rstr,c[nn],ac->rstr,c[nn]^c_x,n->depth,n->id);
+                }
+            }
+        }
+    }
+
+    if (n->matched_patterns && n->matched_patterns->num && n->final) {
+    char lbuf[300];
+    int nl = 0, j;
+
+    apl = &ac->pattern_list[ac->last_pattern_list];
+    an->final = 1;
+    an->patterns = ac->last_pattern_list;
+
+    nl = snprintf(lbuf,sizeof(lbuf),"'%.100s' N:%d{",ac->rstr,n->matched_patterns->num);
+    for (j=0; j<n->matched_patterns->num; j++,apl++)
+      {
+        AC_PATTERN_t *sid = &n->matched_patterns->patterns[j];
+        apl->len = sid->length;
+        apl->from_start = sid->rep.from_start;
+        apl->at_end = sid->rep.at_end;
+        apl->last = j == n->matched_patterns->num - 1;
+        apl->code = sid->rep.number;
+
+        apl->pattern = aho_find_pattern(ac,sid->astring,sid->length);
+        if(!apl->pattern) {
+            apl->pattern = ac->last_pattern;
+            ac->patterns[ac->last_pattern] = sid->astring;
+            ac->last_pattern++;
+        }
+        ac->last_pattern_list++;
+
+        if(j) nl += snprintf(&lbuf[nl],sizeof(lbuf)-nl-1,", ");
+        nl += snprintf(&lbuf[nl],sizeof(lbuf)-nl-1,"%d %c%.100s%c",
+                        sid->rep.number & 0x3fff,
+                        sid->rep.number & 0x8000 ? '^':' ',
+                        sid->astring,
+                        sid->rep.number & 0x4000 ? '$':' ');
+      }
+    if(0) printf("%s}\n",lbuf);
+    }
+    return ACERR_SUCCESS;
+}
+
+static void ac_automata_compile_nextchar(AC_AUTOMATA_t * thiz, AC_NODE_t * n, AC_NODE_t * next,int idx, void *data ) {
+    struct aho_compile *ac = (struct aho_compile *)data;
+    ac->rstr[n->depth] = thiz->ac_path[n->depth].l;
+    ac->rstr[n->depth+1] = 0;
+}
+
+void ac_automata_compile(AC_AUTOMATA_t * thiz, const char *name,int do_patt) {
+  unsigned int i, j;
 
   struct aho_compile ac;
-  struct ac_path *path;
   struct aho_node *an;
-  AC_NODE_t * n, *next;
-  AC_ALPHABET_t alpha;
   struct aho_patterns *apl;
 
   bzero((char *)&ac,sizeof(ac));
@@ -347,151 +437,15 @@ void x_automata_compile(AC_AUTOMATA_t * thiz, char *rstr, size_t rstr_size,const
   ac.next      = calloc(ac.outgoing_count+1,sizeof(int));
   ac.patterns  = calloc(ac.pattern_count+1,sizeof(char *));
   ac.pattern_list = calloc(ac.pattern_list_count+1,sizeof(struct aho_patterns));
-
   ac.last_pattern=1;
   ac.last_pattern_list=1;
   ac.last_outgoing=1;
   *ac.outgoings = '#';
 
   if(!ac.a_node) abort();
+  ac.rstr[0] = '\0';
 
-  path  = thiz->ac_path;
-
-  if(0) printf("---DUMP- all nodes %u - max strlen %u -%s-  outgoung %d, pattern_list %d, pattern %d --\n",
-          (unsigned int)thiz->all_nodes_num,
-          (unsigned int)thiz->max_str_len,
-          thiz->automata_open ? "open":"ready",
-          ac.outgoing_count,
-          ac.pattern_list_count,
-          ac.pattern_count
-          );
-//  printf("root: %d\n",thiz->root->id);
-  path[1].n = thiz->root;
-  path[1].idx = 0;
-  path[1].l = 0;
-  ip = 1;
-  *rstr = '\0';
-  while(ip != 0) {
-
-    n = path[ip].n;
-    if(!path[ip].idx) {
-        // xdump_node_header(n);
-        an = &ac.a_node[n->id];
-        an->f_node = n->failure_node ? n->failure_node->id : 0;
-        if(n->use) {
-            an->range = n->range;
-            if(n->one) {
-                an->degree = 0;
-                an->alpha = n->one_alpha;
-                an->outgoing = ((AC_NODE_t *)n->outgoing)->id;
-            } else {
-                int nn;
-                char *c = (char *)edge_get_alpha(n->outgoing);
-                uint8_t c_x,c_f=0;
-                an->degree = n->outgoing->degree - 1;
-                an->alpha = n->range ? n->one_alpha:0;
-                an->outgoing = ac.last_outgoing;
-                for(nn = 0; nn < n->outgoing->degree; nn++,ac.last_outgoing++) {
-                    ac.outgoings[ac.last_outgoing] = c[nn];
-                    ac.next[ac.last_outgoing] = n->outgoing->next[nn] ? n->outgoing->next[nn]->id:0;
-                    c_x = toupper(c[nn]) ^ tolower(c[nn]);
-                    if(c_x) {
-                        char *c_d = memchr(c,c[nn]^c_x,n->outgoing->degree);
-                        if(c_d && !c_f) {
-                            if(n->outgoing->next[nn] != n->outgoing->next[c_d-c]) {
-                                fprintf(stderr,"Warning! node %d '%c' and '%c' not equal\n",n->id,c[nn],c[nn]^c_x);
-                                c_f = 1;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    
-        if (n->matched_patterns && n->matched_patterns->num && n->final) {
-        AC_PATTERN_t *sid;
-        char lbuf[300];
-        int nl = 0;
-
-        apl = &ac.pattern_list[ac.last_pattern_list];
-        an->final = 1;
-        an->patterns = ac.last_pattern_list;
-
-        nl = snprintf(lbuf,sizeof(lbuf),"'%.100s' N:%d{",rstr,n->matched_patterns->num);
-        for (j=0; j<n->matched_patterns->num; j++,apl++)
-          {
-            sid = &n->matched_patterns->patterns[j];
-            apl->len = sid->length;
-            apl->from_start = sid->rep.from_start;
-            apl->at_end = sid->rep.at_end;
-            apl->last = j == n->matched_patterns->num - 1;
-            apl->code = sid->rep.number;
-
-            apl->pattern = aho_find_pattern(&ac,sid->astring,sid->length);
-            if(!apl->pattern) {
-                apl->pattern = ac.last_pattern;
-                ac.patterns[ac.last_pattern] = sid->astring;
-                ac.last_pattern++;
-            }
-            ac.last_pattern_list++;
-
-            if(j) nl += snprintf(&lbuf[nl],sizeof(lbuf)-nl-1,", ");
-            nl += snprintf(&lbuf[nl],sizeof(lbuf)-nl-1,"%d %c%.100s%c",
-                            sid->rep.number & 0x3fff,
-                            sid->rep.number & 0x8000 ? '^':' ',
-                            sid->astring,
-                            sid->rep.number & 0x4000 ? '$':' ');
-          }
-        if(0) printf("%s}\n",lbuf);
-      }
-    }
-    if(!n->use) {
-        ip--;
-        continue;
-    }
-
-    l = path[ip].l;
-
-    if( l >= rstr_size-1) {
-        ip--; continue;
-    }
-
-    i = path[ip].idx;
-
-    if(!n->use || (n->one && i > 0) || !n->outgoing) {
-        ip--; continue;
-    }
-    if(n->one && !i) {
-        next = (AC_NODE_t *)n->outgoing;
-        alpha = n->one_alpha;
-    } else {
-        next = NULL;
-        while(i < n->outgoing->degree) {
-            next = n->outgoing->next[i];
-            if(next) break;
-            i++;
-        }
-        if(!next) {
-            ip--; continue;
-        }
-        alpha = edge_get_alpha(n->outgoing)[i];
-    }
-
-    path[ip].idx = i+1;
-
-    if(ip >= AC_PATTRN_MAX_LENGTH)
-        continue;
-    ip++;
-
-    rstr[l] = alpha;
-    rstr[l+1] = '\0';
-
-    path[ip].n = next;
-    path[ip].idx = 0;
-    path[ip].l = l+1;
-  }
-
-// printf("---DUMP-END-\n");
+  if(ac_automata_walk(thiz,ac_automata_compile_node,ac_automata_compile_nextchar,&ac) != ACERR_SUCCESS) abort();
 
   printf("#include \"libahocorasick-c.h\"\n");
   printf("struct aho_node a_node_%s[]= {\n",name);
@@ -502,6 +456,7 @@ void x_automata_compile(AC_AUTOMATA_t * thiz, char *rstr, size_t rstr_size,const
         else buf[0] = '\0';
       printf("      { .f_node=%d, .degree=%d, .alpha=0x%02x%s, .outgoing=%d, .patterns=%d, .final=%d, .range=%d },/* %d */\n",
             an->f_node, an->degree, an->alpha, buf, an->outgoing, an->patterns, an->final & 1, an->range & 1, i);
+// {{{{ debug stuff
       if(0) {
           if(an->outgoing && an->degree) {
               printf("// ");
@@ -513,6 +468,7 @@ void x_automata_compile(AC_AUTOMATA_t * thiz, char *rstr, size_t rstr_size,const
                       ac.patterns[ac.pattern_list[an->patterns].pattern]);
           }
       }
+// }}}}
   }
   printf("      {} };\n    struct aho_patterns pattern_list_%s[]= {\n",name);
   apl = &ac.pattern_list[0];
@@ -520,18 +476,29 @@ void x_automata_compile(AC_AUTOMATA_t * thiz, char *rstr, size_t rstr_size,const
       printf("      { .len=%d, .from_start=%d, .at_end=%d, .last=%d, .code=%d, .pattern=%d }, /* %d */\n",
               apl->len,apl->from_start,apl->at_end,apl->last,apl->code,apl->pattern,i);
   }
-  printf("      {}};\n    char outgoings_%s[] = \"",name);
-  for(i=0; i < ac.last_outgoing; i++) {
+  {
+  char buf[128],*eb,*o;
+  printf("      {}};\n    char outgoings_%s[] =\n",name);
+  for(i=0,eb = &buf[sizeof(buf)-1],o = buf; i < ac.last_outgoing; i++) {
       switch(ac.outgoings[i]) {
-        case  '\0' : printf("\\0"); break;
-        case  '\t' : printf("\\t"); break;
-        case  '\r' : printf("\\r"); break;
-        case  '\n' : printf("\\n"); break;
-        case  '"' : printf("\\\""); break;
-        default: printf("%c",ac.outgoings[i]);
+        case  '\0' : *o++ = '\\'; *o++ = '0'; break;
+        case  '\t' : *o++ = '\\'; *o++ = 't'; break;
+        case  '\r' : *o++ = '\\'; *o++ = 'r'; break;
+        case  '\n' : *o++ = '\\'; *o++ = 'n'; break;
+        case  '"'  : *o++ = '\\'; *o++ = '\\'; break;
+        default: if((unsigned char)ac.outgoings[i] < 32) {
+                     o += snprintf(o,5,"\\x%2x",(unsigned char)ac.outgoings[i]);
+                 } else 
+                     *o++ = ac.outgoings[i];
+      }
+      if(eb - o < 5 || i == ac.last_outgoing-1) {
+          *o = '\0';
+          printf("\t\t\"%s\"%s\n",buf,i == ac.last_outgoing-1 ? ";":" \\");
+          o = buf;
       }
   }
-  printf("\";\n    unsigned short next_%s[]= {\n",name);
+  }
+  printf("    unsigned short next_%s[]= {\n",name);
   for(i=0,j=0; i < ac.last_outgoing; i++) {
       if(!j) printf("%s      ",i ? "\n":"");
       printf("%d,",ac.next[i]);
@@ -541,7 +508,7 @@ void x_automata_compile(AC_AUTOMATA_t * thiz, char *rstr, size_t rstr_size,const
 
   printf("};\n");
   if(do_patt) {
-    printf("/* patterns length %d */\n    char *patterns_%s[]= { NULL,\n",ac.pattern_length,name);
+    printf("    char *patterns_%s[]= { NULL,\n",name);
     for(i=1; i < ac.last_pattern; i++) {
         printf("      \"%s\", /* %d */\n",ac.patterns[i],i);
     }
@@ -552,9 +519,23 @@ void x_automata_compile(AC_AUTOMATA_t * thiz, char *rstr, size_t rstr_size,const
         .a_node       = &a_node_%s[0],\n\
         .pattern_list = &pattern_list_%s[0],\n\
         .next         = &next_%s[0],\n\
-        .outgoings    = &outgoings_%s[0],\n", name,name,name,name,name);
-  if(do_patt) printf("       .patterns     = &patterns_%s[0]\n",name);
+        .outgoings    = &outgoings_%s[0],\n\
+        .patterns     = ", name,name,name,name,name);
+  if(do_patt) printf("&patterns_%s[0]\n",name);
+      else printf("NULL");
   printf("    };\n");
+  printf("    /*\n       Total length of all patterns %d bytes\n",ac.pattern_length);
+  printf("       sizeof a_node_%s\t\t%u*%lu -> %lu bytes\n",name,
+                        thiz->all_nodes_num + 1,sizeof(struct aho_node),(thiz->all_nodes_num + 1 ) * sizeof(struct aho_node));
+  printf("       sizeof pattern_list_%s\t%d*%lu -> %lu bytes\n",name,
+                        ac.last_pattern_list + 1,sizeof(struct aho_patterns),(ac.last_pattern_list + 1 ) * sizeof(struct aho_patterns));
+  printf("       sizeof next_%s\t\t%d*%lu -> %lu bytes\n",name,
+                        ac.last_outgoing,sizeof(short),(ac.last_outgoing + 1) * sizeof(short));
+  if(do_patt)
+    printf("       sizeof patterns_%s\t%d*%lu -> %lu bytes\n",name,
+                        ac.last_pattern + 1,sizeof(char*),(ac.last_pattern + 1) * sizeof(char*));
+  printf("       sizeof outgoings_%s\t%u bytes\n",name,ac.last_outgoing + 1);
+  printf("     */\n");
 }
 
 /* vim: set ts=4 sw=4 et foldmarker={{{{,}}}} foldmethod=marker :  */
