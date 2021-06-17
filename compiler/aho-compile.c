@@ -13,7 +13,7 @@
 
 #include "ahocorasick.h"
 
-#include "libahocorasick-c.h"
+#include "aho-compiled-inc.h"
 struct aho_compile {
     int             outgoing_count;
     int             pattern_count;
@@ -38,11 +38,16 @@ struct lines_list {
     int code;
 } *lines = NULL;
 
+extern uint8_t _binary_aho_compiled_inc_h_start[];
+extern uint8_t _binary_aho_compiled_inc_h_end[];
+extern uint8_t _binary_aho_compiled_lib_c_start[];
+extern uint8_t _binary_aho_compiled_lib_c_end[];
+
 static inline AC_ALPHABET_t *edge_get_alpha(struct edge *e) {
         return (AC_ALPHABET_t *)(&e->next[e->max]);
 }
 
-void ac_automata_compile(AC_AUTOMATA_t * thiz, const char *name,int do_patt);
+void ac_automata_compile(AC_AUTOMATA_t * thiz, const char *name,int do_patt,int to_lc);
 
 // {{{{
 void *ndpi_malloc(size_t size) {
@@ -107,8 +112,12 @@ int l;
     ll = malloc(sizeof(*ll));
     if(!ll) abort();
     ll->next = lines;
-    ll->str = strdup(str);
+    ll->str = malloc(l+1);
+    if(!ll->str) abort();
+    memcpy(ll->str,s,l);
+    ll->str[l] = '\0';
     ll->len = l;
+
     ll->code = n;
     lines = ll;
 	return r == ACERR_SUCCESS;
@@ -149,6 +158,7 @@ void usage(char *s) {
    -D           - with define\n\
    -H str       - define starting from str ('H_' by default)\n\
    -I           - ignore case by default\n\
+   -N name      - name of structs\n\
    -p           - patterns output\n\
    -h           - help\n");
      }
@@ -170,6 +180,10 @@ int do_patt = 0;
 int def_str_len;
 char *def_str = NULL;
 FILE *ifd;
+
+  printf("\n/*");
+  for(i=0; i < argc; i++) printf(" %s",argv[i]);
+  printf(" */\n\n");
 
   ac_name[0] = 0;
 
@@ -256,7 +270,7 @@ FILE *ifd;
   ac_automata_finalize(ac);
   if(do_dump) {
         printf("/*\n");
-        ac_automata_dump(ac,buf,sizeof(buf)-1,1);
+        ac_automata_dump(ac,NULL);
         printf(" */\n");
   }
   for(ll = lines; ll; ll = ll->next) {
@@ -264,7 +278,7 @@ FILE *ifd;
       if(num != ll->code)
           fprintf(stderr,"%.*s %d != %d\n",ll->len,ll->str,num,ll->code);
   }
-  ac_automata_compile(ac,ac_name,do_patt);
+  ac_automata_compile(ac,ac_name,do_patt,to_lc);
 
   ac_automata_release(ac,0);
   return 0;
@@ -436,7 +450,7 @@ static void ac_automata_compile_nextchar(AC_AUTOMATA_t * thiz, AC_NODE_t * n, AC
     ac->rstr[n->depth+1] = 0;
 }
 
-void ac_automata_compile(AC_AUTOMATA_t * thiz, const char *name,int do_patt) {
+void ac_automata_compile(AC_AUTOMATA_t * thiz, const char *name,int do_patt,int to_lc) {
   unsigned int i, j;
 
   struct aho_compile ac;
@@ -471,7 +485,12 @@ void ac_automata_compile(AC_AUTOMATA_t * thiz, const char *name,int do_patt) {
       fprintf(stderr,"Too many nodes (%d)\n",thiz->all_nodes_num+1);
       exit(1);
   }
-  printf("#include \"libahocorasick-c.h\"\n");
+  {
+  int size = _binary_aho_compiled_inc_h_end - _binary_aho_compiled_inc_h_start;
+  printf("%.*s\n",size, (char *)_binary_aho_compiled_inc_h_start);
+  size = _binary_aho_compiled_lib_c_end - _binary_aho_compiled_lib_c_start;
+  printf("%.*s\n",size, (char *)_binary_aho_compiled_lib_c_start);
+  }
   printf("struct aho_node a_node_%s[]= {\n",name);
   for(i=0,an = ac.a_node; i <= thiz->all_nodes_num+1; i++,an++) {
       char buf[12];
@@ -501,6 +520,7 @@ void ac_automata_compile(AC_AUTOMATA_t * thiz, const char *name,int do_patt) {
     for(i=0; i < ac.last_pattern_list; i++,apl++) {
         printf("      { .len=%d, .from_start=%d, .at_end=%d, .last=%d, .code=%d, .pattern=%d }, /* %d */\n",
               apl->len,apl->from_start,apl->at_end,apl->last,apl->code,apl->pattern,i);
+    }
   }
   {
     char buf[128],*eb,*o;
@@ -547,8 +567,9 @@ void ac_automata_compile(AC_AUTOMATA_t * thiz, const char *name,int do_patt) {
         .next         = &next_%s[0],\n\
         .outgoings    = &outgoings_%s[0],\n\
         .patterns     = ", name,name,name,name,name);
-  if(do_patt) printf("&patterns_%s[0]\n",name);
-      else printf("NULL");
+  if(do_patt) printf("&patterns_%s[0],\n",name);
+      else printf("NULL,");
+  printf("        .to_lc     = %d\n",to_lc);
   printf("    };\n");
   printf("    /*\n       Total length of all patterns %d bytes\n",ac.pattern_length);
   printf("       sizeof a_node_%s\t\t%u*%lu -> %lu bytes\n",name,

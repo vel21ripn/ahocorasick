@@ -105,6 +105,7 @@ typedef struct
 {
   AC_PATTERN_t *matched[4];   /* for ac_automata_exact_match() */
   AC_PATTERN_t *patterns;     /* Array of matched pattern */
+  unsigned int  match_map;    /*  */
   unsigned int  position;     /* The end position of matching pattern(s) in the text */
   unsigned short int match_num;     /* Number of matched patterns */
   unsigned short int match_counter; /* Counter of found matches */
@@ -120,7 +121,7 @@ typedef struct
   AC_MATCH_t match;
   AC_ALPHABET_t * astring;    /* String of alphabets */
   unsigned short int  length, /* Length of string */
-	              ignore_case;
+	              ignore_case:1,debug:1;
 } AC_TEXT_t;
 
 
@@ -184,10 +185,6 @@ typedef struct ac_node
   AC_ALPHABET_t  *a_ptr;
 } AC_NODE_t;
 
-#ifndef __SIZEOF_POINTER__
-#error SIZEOF_POINTER not defined!
-#endif
-
 struct edge {
   unsigned short degree;      /* Number of outgoing edges */
   unsigned short max;         /* Max capacity of allocated memory for outgoing */
@@ -222,7 +219,7 @@ typedef struct
    * means not finalized (is open). after finalizing automata you can not
    * add pattern to automata anymore. */
   unsigned short automata_open,
-		 to_lc:1, no_root_range:1; /* lowercase match */
+		 to_lc:1, no_root_range:1,debug:1; /* lowercase match */
 
   /* Statistic Variables */
   unsigned long total_patterns; /* Total patterns in the automata */
@@ -233,6 +230,7 @@ typedef struct
   int id;	/* node id */
   int add_to_range; /* for convert to range */
   int n_oc,n_range,n_find; /* statistics */
+  char name[32]; /* if debug != 0 */
 } AC_AUTOMATA_t;
 
 typedef AC_ERROR_t (*NODE_CALLBACK_f)(AC_AUTOMATA_t *, AC_NODE_t *,int idx, void *);
@@ -241,9 +239,11 @@ typedef void (*ALPHA_CALLBACK_f)(AC_AUTOMATA_t *, AC_NODE_t *,AC_NODE_t *,int ,v
 
 #define AC_FEATURE_LC 1
 #define AC_FEATURE_NO_ROOT_RANGE 2
+#define AC_FEATURE_DEBUG 4
 
 AC_AUTOMATA_t * ac_automata_init     (MATCH_CALLBACK_f mc);
 AC_ERROR_t      ac_automata_feature  (AC_AUTOMATA_t * thiz, unsigned int feature);
+AC_ERROR_t      ac_automata_name     (AC_AUTOMATA_t * thiz, char *name);
 AC_ERROR_t      ac_automata_add      (AC_AUTOMATA_t * thiz, AC_PATTERN_t * str);
 AC_ERROR_t      ac_automata_finalize (AC_AUTOMATA_t * thiz);
 AC_ERROR_t      ac_automata_walk     (AC_AUTOMATA_t * thiz, NODE_CALLBACK_f node_cb,
@@ -256,7 +256,7 @@ int             ac_automata_exact_match(AC_PATTERNS_t *mp,int pos, AC_TEXT_t *);
 void            ac_automata_clean    (AC_AUTOMATA_t * thiz);
 void            ac_automata_release  (AC_AUTOMATA_t * thiz, uint8_t free_pattern);
 #ifndef __KERNEL__
-void            ac_automata_dump     (AC_AUTOMATA_t * thiz, 
-					char *buf, size_t bufsize, char repcast);
+void            ac_automata_dump     (AC_AUTOMATA_t * thiz, FILE *);
+extern int      ac_automata_global_debug;
 #endif
 #endif  

@@ -1,0 +1,90 @@
+H_Http_resp 0x2
+|HTTP/0.9
+
+H_Http_resp 0x2
+|HTTP/1.0
+
+H_Http_resp 0x2
+|HTTP/1.1
+
+H_Server 0x3
+|Server:
+
+H_Host
+|Host:
+
+H_X_Fwd
+|X-Forwarded-For:
+
+H_ContentType
+|Content-Type:
+
+H_Content_Encoding
+|Content-Encoding:
+
+H_Content_Length
+|Content-Length:
+
+H_Content_Disposition
+|Content-Disposition:
+
+H_Transfer_Encoding
+|Transfer-Encoding:
+
+H_Accept
+|Accept:
+
+H_Referer
+|Referer:
+
+H_User_Agent
+|User-Agent:
+
+H_Cookie
+|Cookie:
+
+H_X_Session_Type
+|X-Session-Type:
+
+H_Origin
+|Origin:
+
+H_Date 0x1
+|Date:
+
+H_Vaty 0x1
+|Vary:
+
+H_ETag 0x1
+|ETag:
+
+H_Pragma 0x1
+|Pragma:
+
+H_Expires 0x1
+|Expires:
+
+H_Set_Cookie 0x1
+|Set-Cookie:
+
+H_Keep_Alive 0x1
+|Keep-Alive:
+
+H_Connection 0x1
+|Connection:
+
+H_Last_Modified 0x1
+|Last-Modified:
+
+H_Accept_Ranges 0x1
+|Accept-Ranges:
+
+H_Accept_Language 0x1
+|Accept-Language:
+
+H_Accept_Encoding 0x1
+|Accept-Encoding:
+
+H_Upgrade_Insecure_Requests 0x1
+|Upgrade-Insecure-Requests:
+

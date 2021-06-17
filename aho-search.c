@@ -179,9 +179,8 @@ for(p=0; p < max_p; p++) {
   acx[p] = ac;
 #ifdef NEW_AHO
   if(0 && p <= 0) {
-	  char buf[512];
 	  printf("P=%d\n",p);
-	  ac_automata_dump(ac,buf,sizeof(buf)-1,'n');
+	  ac_automata_dump(ac,NULL);
   }
 #endif
  }

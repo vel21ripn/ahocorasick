@@ -25,7 +25,7 @@ PROG += aho-search-21 aho-search-22 aho-search-23
 
 PROG += aho-memleak-11 aho-memleak-12 aho-memleak-13
 PROG += aho-memleak-21 aho-memleak-22 aho-memleak-23
-PROG += aho-compile
+PROG += compiler/aho-compile
 
 all: $(PROG)
 
@@ -60,8 +60,8 @@ aho-memleak-22: aho-memleak.c bigram.h libahocorasick.o
 aho-memleak-23: aho-memleak.c all_hosts.h libahocorasick.o
 	$(CC) $(PERF) $(CFLAGS) $(INC2) -DNEW_AHO -DAHOST -o $@ aho-memleak.c libahocorasick.o
 
-aho-compile: aho-compile.c all_hosts.h libahocorasick.o libahocorasick-c.h
-	$(CC) $(PERF) $(CFLAGS) $(INC2) -DNEW_AHO -DAHOST -o $@ aho-compile.c libahocorasick.o
+compiler/aho-compile: libahocorasick.o
+	make -C compiler
 
 libahocorasick.o: new/ahocorasick.c new/ahocorasick.h
 	$(CC) -o $@ -c $(CFLAGS) $(PERF) $(INC2) $<
@@ -81,3 +81,4 @@ sort.o: src/sort.c src/include/sort.h
 
 clean::
 	rm -f *.o ahocorasick.a xmemchr $(PROG)
+	make -C compiler clean

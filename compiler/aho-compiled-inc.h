@@ -1,6 +1,6 @@
 
-#ifndef AHO_COMPILED_H
-#define AHO_COMPILED_H
+#ifndef AHO_COMPILED_INC_H
+#define AHO_COMPILED_INC_H
 struct aho_patterns {
     unsigned short int	len:13,from_start:1,at_end:1,last:1,
 			code,
@@ -24,6 +24,7 @@ struct aho_compiled {
     unsigned short  *next;
     char            *outgoings;
     char            **patterns;
+    int		    to_lc;
 };
 
 

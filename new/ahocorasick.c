@@ -24,7 +24,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#ifndef WIN32
 #include <unistd.h>
+#else
+#define __SIZEOF_LONG__ 4
+#endif
 #include <stdint.h>
 #include <sys/types.h>
 #else
@@ -65,9 +69,11 @@ struct aho_dump_info {
   int    buf_pos,ip;
   char   *bufstr;
   size_t bufstr_len;
+  FILE   *file;
 };
 
 static void dump_node_header(AC_NODE_t * n, struct aho_dump_info *);
+int ac_automata_global_debug = 0;
 #endif
 
 /* Private function prototype */
@@ -188,8 +194,17 @@ AC_ERROR_t ac_automata_feature (AC_AUTOMATA_t * thiz, unsigned int feature)
   if(thiz->all_nodes_num || thiz->total_patterns) return ACERR_ERROR;
   thiz->to_lc = (feature & AC_FEATURE_LC) != 0;
   thiz->no_root_range = (feature & AC_FEATURE_NO_ROOT_RANGE) != 0;
+  thiz->debug = (feature & AC_FEATURE_DEBUG) != 0;
   return ACERR_SUCCESS;
 }
+
+AC_ERROR_t ac_automata_name (AC_AUTOMATA_t * thiz, char *name)
+{
+  if(!thiz) return ACERR_ERROR;
+  strncpy(thiz->name,name,sizeof(thiz->name)-1);
+  return ACERR_SUCCESS;
+}
+
 
 /******************************************************************************
  * FUNCTION: ac_automata_add
@@ -364,30 +379,31 @@ int ac_automata_exact_match(AC_PATTERNS_t *mp,int pos, AC_TEXT_t *txt) {
     AC_PATTERN_t *patterns = mp->patterns;
     AC_PATTERN_t **matched = txt->match.matched;
     int i;
-    for(i=0; i < mp->num; i++,patterns++) {
+    int match_map = 0;
+    for(i=0; i < mp->num && i < (__SIZEOF_INT__*8-1); i++,patterns++) {
       do {
         if(patterns->rep.from_start && patterns->rep.at_end) {
             if(pos == txt->length && patterns->length == pos)
-                matched[0] = patterns;
+                matched[0] = patterns, match_map |= 1 << i;
             break;
         }
         if(patterns->rep.from_start) {
             if(patterns->length == pos) 
                 if(!matched[1] || patterns->length > matched[1]->length)
-                    matched[1] = patterns;
+                    matched[1] = patterns, match_map |= 1 << i;
             break;
         }
         if(patterns->rep.at_end) {
             if(pos == txt->length)
                 if(!matched[2] || patterns->length > matched[2]->length)
-                    matched[2] = patterns;
+                    matched[2] = patterns, match_map |= 1 << i;
             break;
         }
         if(!matched[3] || patterns->length > matched[3]->length)
-            matched[3] = patterns;
+            matched[3] = patterns, match_map |= 1 << i;
       } while(0);
     }
-    return 0;
+    return match_map;
 }
 
 /******************************************************************************
@@ -409,9 +425,8 @@ int ac_automata_exact_match(AC_PATTERNS_t *mp,int pos, AC_TEXT_t *txt) {
 int ac_automata_search (AC_AUTOMATA_t * thiz,
         AC_TEXT_t * txt, AC_REP_t * param)
 {
-  uint8_t alpha;
   unsigned long position;
-  int icase = 0,i;
+  int icase = 0,i,debug=0;
   AC_MATCH_t *match;
   AC_NODE_t *curr;
   AC_NODE_t *next;
@@ -423,10 +438,16 @@ int ac_automata_search (AC_AUTOMATA_t * thiz,
   position = 0;
   curr = thiz->root;
   apos = txt->astring;
+#ifndef __KERNEL__
+  if(thiz->debug && ac_automata_global_debug != 0) debug = 1;
+  txt->debug = debug;
+  if(debug)
+      printf("aho %s: search %.*s\n", thiz->name[0] ? thiz->name:"unknown", txt->length, apos);
+#endif
   match = &txt->match;
   memset((char*)match,0,sizeof(*match));
 
-  icase = !thiz->to_lc;
+//  icase = !thiz->to_lc;
   /* The 'txt->ignore_case' option is checked
    * separately otherwise clang will detect
    * uninitialized memory usage much later. */
@@ -434,7 +455,7 @@ int ac_automata_search (AC_AUTOMATA_t * thiz,
   /* This is the main search loop.
    * it must be keep as lightweight as possible. */
   while (position < txt->length) {
-      alpha = (uint8_t)apos[position];
+      uint8_t alpha = (uint8_t)apos[position];
       if(thiz->to_lc) alpha = aho_lc[alpha];
       if(!(next = node_findbs_next_ac(curr, (uint8_t)alpha, icase))) {
           if(curr->failure_node) /* we are not in the root node */
@@ -447,7 +468,19 @@ int ac_automata_search (AC_AUTOMATA_t * thiz,
           if(curr->final) {
               match->match_counter++; /* we have a matching */
               /* select best match */
-              ac_automata_exact_match(curr->matched_patterns,position,txt);
+              match->match_map = ac_automata_exact_match(curr->matched_patterns,position,txt);
+#ifndef __KERNEL__
+              if(debug && match->match_map) {
+                  int i;
+                  AC_PATTERN_t *patterns = curr->matched_patterns->patterns;
+                  for(i=0; i < curr->matched_patterns->num; i++) {
+                      if(!(match->match_map & (1 << i))) continue;
+                      printf("  match%d: %.*s%s [%u]\n",i+1,patterns[i].length,patterns[i].astring,
+                              patterns[i].rep.at_end ? "$":"",
+                              patterns[i].rep.number);
+                  }
+              }
+#endif
               if(thiz->match_handler) {
                   /* We check 'next' to find out if we came here after a alphabet
                    * transition or due to a fail. in second case we should not report
@@ -467,6 +500,16 @@ int ac_automata_search (AC_AUTOMATA_t * thiz,
   for(i = 0; i < 4; i++)
       if(txt->match.matched[i]) {
             *param = (txt->match.matched[i])->rep;
+#ifndef __KERNEL__
+            if(debug) {
+                AC_PATTERN_t *pattern = txt->match.matched[i];
+                printf("best match: %s%.*s%s [%u]\n",
+                          pattern->rep.from_start ? "^":"",
+                          pattern->length,pattern->astring,
+                          pattern->rep.at_end ? "$":"",
+                          pattern->rep.number);
+            }
+#endif
             return 1;
       }
   return 0;
@@ -535,26 +578,26 @@ void ac_automata_release (AC_AUTOMATA_t * thiz, uint8_t free_pattern) {
 static void dump_node_header(AC_NODE_t * n, struct aho_dump_info *ai) {
     char *c;
     int i;
-    printf("%04d: ",n->id);
-    if(n->failure_node) printf(" failure %04d:",n->failure_node->id);
-    printf(" d:%d %c",n->depth, n->use ? '+':'-');
+    fprintf(ai->file,"%04d: ",n->id);
+    if(n->failure_node) fprintf(ai->file," failure %04d:",n->failure_node->id);
+    fprintf(ai->file," d:%d %c",n->depth, n->use ? '+':'-');
     ai->memcnt += sizeof(*n);
     if(n->matched_patterns) {
         ai->memcnt += sizeof(n->matched_patterns) + 
                 n->matched_patterns->max*sizeof(n->matched_patterns->patterns[0]);
     }
-    if(!n->use) { printf("\n"); return; }
+    if(!n->use) { fprintf(ai->file,"\n"); return; }
     if(n->one) {
             (ai->node_oc)++;
-            printf(" '%c' next->%d\n",n->one_alpha,
+            fprintf(ai->file," '%c' next->%d\n",n->one_alpha,
                 n->outgoing ? ((AC_NODE_t *)n->outgoing)->id : -1);
             return;
     }
     if(!n->outgoing) {
-            printf(" BUG! !outgoing\n");
+            fprintf(ai->file," BUG! !outgoing\n");
             return;
     }
-    printf("%s\n",n->range ? " RANGE":"");
+    fprintf(ai->file,"%s\n",n->range ? " RANGE":"");
     c = (char *)edge_get_alpha(n->outgoing);
     if(n->outgoing->degree <= 8)
             (ai->node_8c)++;
@@ -563,7 +606,7 @@ static void dump_node_header(AC_NODE_t * n, struct aho_dump_info *ai) {
     if(n->range)
             (ai->node_xr)++;
     for(i=0; i < n->outgoing->degree; i++) {
-            printf("  %d: \"%c\" -> %d\n",i,c[i],
+            fprintf(ai->file,"  %d: \"%c\" -> %d\n",i,c[i],
                     n->outgoing->next[i] ? n->outgoing->next[i]->id:-1);
     }
     ai->memcnt += sizeof(n->outgoing) + edge_data_size(n->outgoing->max);
@@ -577,7 +620,7 @@ static AC_ERROR_t dump_node_common(AC_AUTOMATA_t * thiz,
     if(idx) return ACERR_SUCCESS;
     dump_node_header(n,ai);
     if (n->matched_patterns && n->matched_patterns->num && n->final) {
-        char lbuf[300];
+        char lbuf[512];
         int nl = 0,j;
 
         nl = snprintf(lbuf,sizeof(lbuf),"'%.100s' N:%d{",rstr,n->matched_patterns->num);
@@ -590,7 +633,7 @@ static AC_ERROR_t dump_node_common(AC_AUTOMATA_t * thiz,
                             sid->astring,
                             sid->rep.number & 0x4000 ? '$':' ');
         }
-        printf("%s}\n",lbuf);
+        fprintf(ai->file,"%s}\n",lbuf);
       }
     return ACERR_SUCCESS;
 }
@@ -612,22 +655,23 @@ static void dump_node_str(AC_AUTOMATA_t * thiz, AC_NODE_t * node,
  * char repcast: 'n': print AC_REP_t as number, 's': print AC_REP_t as string
  ******************************************************************************/
 
-void ac_automata_dump(AC_AUTOMATA_t * thiz, char *rstr, size_t rstr_size, char repcast) {
+void ac_automata_dump(AC_AUTOMATA_t * thiz, FILE *file) {
   struct aho_dump_info ai;
 
   memset((char *)&ai,0,sizeof(ai));
-
-  printf("---DUMP- all nodes %u - max strlen %u -%s---\n",
+  ai.file = file ? file : stdout;
+  fprintf(ai.file,"---DUMP- all nodes %u - max strlen %u -%s---\n",
           (unsigned int)thiz->all_nodes_num,
           (unsigned int)thiz->max_str_len,
           thiz->automata_open ? "open":"ready");
-  printf("root: %px\n",thiz->root);
-  *rstr = '\0';
-  ai.bufstr = rstr;
-  ai.bufstr_len = rstr_size;
+
+  ai.bufstr = acho_malloc(AC_PATTRN_MAX_LENGTH+1);
+  ai.bufstr_len = AC_PATTRN_MAX_LENGTH;
+  if(!ai.bufstr) return;
+  ai.bufstr[0] = '\0';
 
   ac_automata_walk(thiz,dump_node_common,dump_node_str,(void *)&ai);
-  printf("---\n mem size %zu avg node size %d, node one char %d, <=8c %d, >8c %d, range %d\n---DUMP-END-\n",
+  fprintf(ai.file,"---\n mem size %zu avg node size %d, node one char %d, <=8c %d, >8c %d, range %d\n---DUMP-END-\n",
               ai.memcnt,(int)ai.memcnt/(thiz->all_nodes_num+1),(int)ai.node_oc,(int)ai.node_8c,(int)ai.node_xc,(int)ai.node_xr);
 }
 #endif
@@ -742,7 +786,9 @@ static void node_release(AC_NODE_t * thiz, int free_pattern)
 }
 
 /* Nonzero if X is not aligned on a "long" boundary.  */
+#undef UNALIGNED /* Windows defined it but differently from what Aho expects */
 #define UNALIGNED(X) ((long)X & (__SIZEOF_LONG__ - 1))
+
 #define LBLOCKSIZE __SIZEOF_LONG__ 
 
 #if __SIZEOF_LONG__ == 4
@@ -756,7 +802,7 @@ static inline size_t bsf(uint32_t bits)
 #else
     size_t i=0;
     if(!bits) return i;
-    if((bits & 0xffff)bits == 0) { i+=16; bits >>=16; }
+    if((bits & 0xffff) == 0) { i+=16; bits >>=16; }
     if((bits & 0xff) == 0) i+=8;
     return i;
 #endif
@@ -871,19 +917,20 @@ static AC_NODE_t *node_findbs_next_ac (AC_NODE_t * thiz, uint8_t alpha,int icase
 static int node_has_matchstr (AC_NODE_t * thiz, AC_PATTERN_t * newstr)
 {
   int i;
-  AC_PATTERN_t * str;
+  
   if(!thiz->matched_patterns) return 0;
-  str = thiz->matched_patterns->patterns;
-
-  for (i=0; i < thiz->matched_patterns->num; str++,i++)
-    {
-      if (str->length != newstr->length)
-        continue;
-
-      if(!memcmp(str->astring,newstr->astring,str->length))
-        return 1;
-
-    }
+  
+  for (i=0; i < thiz->matched_patterns->num; i++)
+  {
+    AC_PATTERN_t *str = &(thiz->matched_patterns->patterns[i]);
+    
+    if (str->length != newstr->length)
+      continue;
+    
+    if(!memcmp(str->astring,newstr->astring,str->length))
+      return 1;    
+  }
+  
   return 0;
 }
 
@@ -911,7 +958,7 @@ static AC_NODE_t * node_create_next (AC_NODE_t * thiz, AC_ALPHABET_t alpha)
   return next;
 }
 
-static inline int mp_data_size(int n) {
+static inline size_t mp_data_size(int n) {
     return sizeof(AC_PATTERNS_t) + n*sizeof(AC_PATTERN_t);
 }
 
@@ -1097,14 +1144,12 @@ static int node_range_edges (AC_AUTOMATA_t *thiz, AC_NODE_t * node)
         return 1;
     }
 
-//    if(e->degree < __SIZEOF_LONG__) return 0;
-
     i = (high - low)/8;
     if (i < thiz->add_to_range) i = thiz->add_to_range;
     i += REALLOC_CHUNK_OUTGOING-1;
     i -= i % REALLOC_CHUNK_OUTGOING;
 
-    if(high - low + 1 < e->max + i) {
+    if(high - low + 1 < e->max + i || (node->root && !thiz->no_root_range)) {
         int added = (high - low + 1) - e->max;
         struct edge *new_o = node_resize_outgoing(node->outgoing,added);
         if(new_o) {
@@ -1115,16 +1160,6 @@ static int node_range_edges (AC_AUTOMATA_t *thiz, AC_NODE_t * node)
         return 0;
     }
 
-    if(node->root && !thiz->no_root_range) {
-        struct edge *new_o;
-        int added = (high - low + 1) - e->max;
-        new_o = node_resize_outgoing(node->outgoing,added);
-        if(new_o) {
-            node->outgoing = new_o;
-            acho_2range(node,low,high);
-            return 1;
-        }
-    }
     return 0;
 }
 /******************************************************************************

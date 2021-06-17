@@ -164,8 +164,7 @@ for(j=0; j < max_j; j++) {
   }
 #ifdef NEW_AHO
   if(0){
-    char buf[256];
-    if(j == 0 && getenv("DUMP")) ac_automata_dump(ac,buf,sizeof(buf)-1,1);
+    if(j == 0 && getenv("DUMP")) ac_automata_dump(ac,NULL);
   }
 #endif
   ac_automata_finalize(ac);
@@ -176,8 +175,7 @@ for(j=0; j < max_j; j++) {
 //	  printf("\n");
   }
   {
-    char buf[256];
-    if(j == 0 && getenv("DUMP")) ac_automata_dump(ac,buf,sizeof(buf)-1,1);
+    if(j == 0 && getenv("DUMP")) ac_automata_dump(ac,NULL);
   }
 #endif
   ac_automata_release(ac,0);

@@ -1,0 +1,3 @@
+*.o
+aho-compile
+ndpi_http_hdr.h
