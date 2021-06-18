@@ -60,7 +60,8 @@ int find_pattern(struct aho_compiled *ac,char *str,int lineno) {
 }
 
 int main(int argc,char **argv) {
-int i,l,r0,r1,r2,nolc,lineno;
+int i,l,r2,nolc,lineno;
+struct aho_patterns *r0,*r1;
 FILE *ifd;
 char *c,*c0,buf[256];
 
@@ -78,15 +79,15 @@ while((c = fgets(buf,sizeof(buf)-1,ifd)) != NULL) {
     i = find_pattern(&w1,c0,lineno);
 //    printf("=>%3d %s\n",i,c0);
     r0 = find_aho_str(&w1,c0,0);
-    printf("%s> %3d %3d %s\n",r0 != i ? "!":"",r0,i,c0);
-    if(r0 != i) r2++;
+    printf("%s> %3d %3d %s\n",(r0 && r0->code == i) ? "":"!",r0 ? r0->code:-1,i,c0);
+    if(!r0 || r0->code != i) r2++;
     if(nolc) continue;
     for(c = c0; *c; c++) *c = tolower(*c);
     r1 = find_aho_str(&w1,c0,1);
-    printf("%s> %3d %s\n",i != r1 ? "!":"",r1,c0);
+    printf("%s> %3d %s\n",!(r1 && r1->code == i) ? "!":"",r1 ? r0->code:-1,c0);
     for(c = c0; *c; c++) *c = toupper(*c);
     r1 = find_aho_str(&w1,c0,1);
-    printf("%s> %3d %s\n",i != r1 ? "!":"",r1,c0);
+    printf("%s> %3d %s\n",!(r1 && r1->code == i) ? "!":"",r1 ? r0->code:-1,c0);
 }
 fclose(ifd);
 printf("%d\n",r2);
