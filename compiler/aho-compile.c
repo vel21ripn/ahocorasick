@@ -36,7 +36,9 @@ struct lines_list {
     char *str;
     int len;
     int code;
-} *lines = NULL;
+} *lines = NULL, *defines = NULL;
+
+int is_hex = 0;
 
 extern uint8_t _binary_aho_compiled_inc_h_start[];
 extern uint8_t _binary_aho_compiled_inc_h_end[];
@@ -50,6 +52,31 @@ static inline AC_ALPHABET_t *edge_get_alpha(struct edge *e) {
 void ac_automata_compile(AC_AUTOMATA_t * thiz, const char *name,int do_patt,int to_lc);
 
 // {{{{
+
+void list_str_add(struct lines_list **top,char *str,int n) {
+struct lines_list *ll,*t;
+size_t l;
+
+    if(!top) abort();
+    if(!str || !*str) abort();
+    ll = malloc(sizeof(*ll));
+    if(!ll) abort();
+    l = strlen(str);
+    ll->str = malloc(l+1);
+    if(!ll->str) abort();
+    memcpy(ll->str,str,l+1);
+    ll->len = l;
+    ll->code = n;
+    ll->next = NULL;
+    t = *top;
+    if(!t) {
+        *top = ll;
+        return;
+    }
+    while(t && t->next) t=t->next;
+    t->next = ll;
+}
+
 void *ndpi_malloc(size_t size) {
   return malloc(size);
 }
@@ -73,7 +100,6 @@ int ac_automata_cb(AC_MATCH_t *m, AC_TEXT_t *t,AC_REP_t *data) {
 int add_str(AC_AUTOMATA_t *ac,char *str,int n) {
 AC_PATTERN_t patt;
 AC_ERROR_t r;
-struct lines_list *ll;
 char *s;
 int l;
 
@@ -108,18 +134,9 @@ int l;
     patt.astring = (AC_ALPHABET_t *)s;
 	r = ac_automata_add(ac,&patt);
 	if(r != ACERR_SUCCESS)
-		printf("// ac_automata_add error: %s %d\n",str,r);
-    ll = malloc(sizeof(*ll));
-    if(!ll) abort();
-    ll->next = lines;
-    ll->str = malloc(l+1);
-    if(!ll->str) abort();
-    memcpy(ll->str,s,l);
-    ll->str[l] = '\0';
-    ll->len = l;
-
-    ll->code = n;
-    lines = ll;
+		  printf("// ac_automata_add error: %s %d\n",str,r);
+       else
+          list_str_add(&lines,s,n);
 	return r == ACERR_SUCCESS;
 }
 
@@ -172,7 +189,6 @@ AC_AUTOMATA_t *ac;
 struct lines_list *ll;
 int i,c;
 int with_def = 0;
-int is_hex = 0;
 int no_inc = 0;
 int to_lc = 0;
 int do_dump = 0;
@@ -244,7 +260,8 @@ FILE *ifd;
             int n;
             char *w1 = strtok(buf," \t");
             char *w2 = strtok(NULL," \t");
-            char w2b[32],*e;
+//            char w2b[32];
+            char *e;
             strtok(NULL," \t");
             if(!w1) { printf("!w1\n"); abort();}
             if(w2) {
@@ -252,12 +269,29 @@ FILE *ifd;
                 if(e && *e) { printf("strtoul\n"); abort(); }
                 i = n;
                 if(w2[1] == 'x') is_hex = 1;
-            } else {
-                snprintf(w2b,sizeof(w2b)-1,is_hex ? "0x%x":"%d",i);
-                w2 = w2b;
+//            } else {
+//                snprintf(w2b,sizeof(w2b)-1,is_hex ? "0x%x":"%d",i);
+//                w2 = w2b;
             }
             if(!add_str(ac,strdup(buf2),i))	{ printf("add_str '%s' %d\n",buf2,i); abort(); };
-            printf("#define %s %s\n",w1,w2);
+            {
+                struct lines_list *ll = defines;
+                int dup = 0,err = 0;
+                for(ll=defines; ll; ll=ll->next) {
+                    if(!strcmp(ll->str,w1)) {
+                        if(ll->code == i)
+                            dup = 1;
+                          else
+                            err = 1;
+                    }
+                }
+                if(err) {
+                    printf("Redefine %s!\n",w1);
+                    exit(1);
+                }
+                if(!dup)
+                    list_str_add(&defines,w1,i);
+            }
         }
       } else {
     	if(!add_str(ac,strdup(buf),i)) { printf("add_str '%s' %d\n",buf,i); abort(); };
@@ -281,6 +315,7 @@ FILE *ifd;
   ac_automata_compile(ac,ac_name,do_patt,to_lc);
 
   ac_automata_release(ac,0);
+  // FIXME free lines and defines
   return 0;
 }
 
@@ -491,7 +526,12 @@ void ac_automata_compile(AC_AUTOMATA_t * thiz, const char *name,int do_patt,int 
   size = _binary_aho_compiled_lib_c_end - _binary_aho_compiled_lib_c_start;
   printf("%.*s\n",size, (char *)_binary_aho_compiled_lib_c_start);
   }
-  printf("struct aho_node a_node_%s[]= {\n",name);
+  if(defines){
+    struct lines_list *ll = defines;
+    for(;ll; ll=ll->next)
+        printf(is_hex ? "#define %s 0x%x\n" : "#define %s %u\n",ll->str,ll->code);
+  }
+  printf("\nstruct aho_node a_node_%s[]= {\n",name);
   for(i=0,an = ac.a_node; i <= thiz->all_nodes_num+1; i++,an++) {
       char buf[12];
       if(an->outgoing && !an->degree) 

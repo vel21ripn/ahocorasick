@@ -32,8 +32,8 @@ static unsigned char aho_xc[256] = {
   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 };
-static char **_patt_ptr = NULL;
-static char *_x_txt[] = { "?","FULL","START","END","MATCH" };
+
+// static char **_patt_ptr = NULL;
 
 static int exact_match(struct aho_patterns *patterns,int pos, int length,
         struct aho_patterns *matched[4]) {
@@ -65,10 +65,14 @@ static int exact_match(struct aho_patterns *patterns,int pos, int length,
                   matched[3] = patterns;
               }
             }
-        if(1 & x) printf("|      %s: len %d code %d '%.*s'%s\n",_x_txt[x],
+/*        if(x) {
+             static char *_x_txt[] = { "?","FULL","START","END","MATCH" };
+             printf("|      %s: len %d code %d '%.*s'%s\n",_x_txt[x],
                       patterns->len,patterns->code,patterns->len,
                       _patt_ptr ? _patt_ptr[patterns->pattern]:"",
                       patterns->last ? " !":"");
+	   }
+ */
         if(x) xr++;
         if(patterns->last) break;
         patterns++;
@@ -88,7 +92,7 @@ struct aho_patterns *find_aho_str(struct aho_compiled *ac,char *str,int icase) {
   struct aho_patterns *matched[4] = { NULL,NULL,NULL,NULL };
   n = &ac->a_node[i];
 
-  _patt_ptr = ac->patterns;
+//  _patt_ptr = ac->patterns;
 
   while(l != 0) {
     next = 0;
